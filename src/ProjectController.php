@@ -14,9 +14,7 @@ class ProjectController {
 
         try  {
        
-            $sql = "SELECT * 
-                    FROM murmur
-                    WHERE 1";
+            $sql = "SELECT * FROM murmur WHERE 1";
         
             $statement = $this->connection->prepare($sql);
             $statement->setFetchMode(PDO::FETCH_OBJ);
