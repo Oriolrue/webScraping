@@ -1,12 +1,14 @@
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 import time
 import pymysql
 
 # Configuración de Selenium
 options = Options()
-options.headless = False  # Cambia a True si deseas ejecución en segundo plano
+options.headless = False  # Cambia a True para ejecución en segundo plano
 driver = webdriver.Chrome(options=options)
 
 # Conexión a la base de datos
@@ -19,12 +21,10 @@ connection = pymysql.connect(
 
 try:
     with connection.cursor() as cursor:
-        # 🔴 Eliminar primero los registros de las tablas dependientes
+        # 🔴 Eliminar registros previos
         cursor.execute("DELETE FROM lore")
         cursor.execute("DELETE FROM image")
-        cursor.execute("DELETE FROM murmur")  # Finalmente, eliminar de la tabla principal
-
-        # Confirmar cambios
+        cursor.execute("DELETE FROM murmur")
         connection.commit()
         print("🔄 Datos antiguos eliminados correctamente.")
 
@@ -40,32 +40,60 @@ try:
     except:
         print("⚠️ No se encontró el botón de cookies.")
 
-    # Obtener los nombres de los enemigos
-    enemies = driver.find_elements(By.CLASS_NAME, 'wds-tabs__tab')
-    descriptions = driver.find_elements(By.CLASS_NAME, 'codexflower')
+    # Obtener todas las pestañas de los enemigos
+    enemy_tabs = driver.find_elements(By.CLASS_NAME, 'wds-tabs__tab')
 
+    for index, tab in enumerate(enemy_tabs):
+        name = tab.text.strip()
 
-    # Insertar los nuevos datos
-    with connection.cursor() as cursor:
-        for i in range(len(enemies)):
-            name = enemies[i].find_element(By.TAG_NAME, 'a').text
+        # 🔹 Hacer clic en la pestaña con JavaScript
+        driver.execute_script("arguments[0].click();", tab)
+        time.sleep(3)  # Esperar un poco más para asegurarnos de que la página haya cargado
 
-            # Insertar en murmur
-            sql_murmur = "INSERT INTO murmur (name) VALUES (%s)"
-            cursor.execute(sql_murmur, (name,))
-            murmur_id = cursor.lastrowid  # Obtener el ID recién insertado
+        # 🔹 Intentar esperar a que la descripción se cargue (con un tiempo de espera más largo)
+        try:
+            # Esperamos que el contenedor de la descripción esté presente
+            description_container = WebDriverWait(driver, 10).until(
+                EC.visibility_of_element_located((By.CLASS_NAME, 'codexflower'))
+            )
 
-            # Insertar en lore (si hay descripción correspondiente)
-            if i < len(descriptions):
-                desc = descriptions[i].text.strip()
-                sql_lore = "INSERT INTO lore (id, description) VALUES (%s, %s)"
-                cursor.execute(sql_lore, (murmur_id, desc))
+            # 🔹 Hacer scroll dentro del div con overflow: auto
+            driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", description_container)
+            time.sleep(2)  # Esperar un momento después de hacer scroll para que el contenido se cargue
+
+            # 🔹 Verificar que el contenido sea visible después de hacer scroll
+            visible_text = description_container.get_attribute("textContent").strip()
+
+            # Si no se obtiene texto, realizar otro scroll
+            if not visible_text:
+                print(f"⚠️ Descripción vacía para {name}. Haciendo más scroll...")
+                driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", description_container)
+                time.sleep(3)  # Esperar un poco más
+
+                visible_text = description_container.get_attribute("textContent").strip()
+
+            # Si aún no hay texto, marcar como no encontrado
+            if not visible_text:
+                visible_text = "Descripción no encontrada"
+
+        except Exception as e:
+            visible_text = "Descripción no encontrada"
+            print(f"⚠️ Error al obtener la descripción para {name}: {e}")
+
+        # Insertar en la base de datos
+        with connection.cursor() as cursor:
+            sql = "INSERT INTO murmur (name) VALUES (%s)"
+            cursor.execute(sql, (name,))
+            murmur_id = cursor.lastrowid
+
+            sql = "INSERT INTO lore (id, description) VALUES (%s, %s)"
+            cursor.execute(sql, (murmur_id, visible_text))
 
         connection.commit()
+        print(f"✅ Guardado: {name} - {visible_text}")
 
-    print("✅ Datos insertados correctamente.")
+    print("✅ Todos los datos han sido insertados correctamente.")
 
 finally:
-    # Cerrar la conexión y el navegador
     connection.close()
     driver.quit()
